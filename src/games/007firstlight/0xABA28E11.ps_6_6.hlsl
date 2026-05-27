@@ -33,12 +33,11 @@ OutputSignature main(
   // so SV_Position.xy maps directly to texel coordinates.
   float4 _9 = mapTPC0.Load(int3((uint)(uint(SV_Position.x)), (uint)(uint(SV_Position.y)), 0));
 
-  // Undo the game's prior display-ish encoding with a 2.2 power and apply an
-  // exposure/range scale from vParams.z. These are linear HDR RGB values after
-  // this point.
-  float _24 = cbHDRResolve.vParams.z * (pow(_9.x, 2.200000047683716f));
-  float _25 = cbHDRResolve.vParams.z * (pow(_9.y, 2.200000047683716f));
-  float _26 = cbHDRResolve.vParams.z * (pow(_9.z, 2.200000047683716f));
+  // Apply the game's final exposure/range scale. The upstream replacement now
+  // writes linear HDR values, so do not apply the original 2.2 decode here.
+  float _24 = cbHDRResolve.vParams.z * _9.x;
+  float _25 = cbHDRResolve.vParams.z * _9.y;
+  float _26 = cbHDRResolve.vParams.z * _9.z;
 
   // Convert linear RGB into a monitor/output color space before PQ encoding.
   // These coefficients match the shape of a BT.2020/PQ output transform:
@@ -46,10 +45,16 @@ OutputSignature main(
   //   G' = 0.0691 R + 0.9195 G + 0.0114 B
   //   B' = 0.0164 R + 0.0880 G + 0.8956 B
   //
-  // The exponent 0.1593017578125 is ST.2084/PQ m1.
-  float _49 = exp2(log2(abs(cbHDRResolve.vParams.y * mad(0.04331306740641594f, _26, mad(0.3292830288410187f, _25, (_24 * 0.6274039149284363f))))) * 0.1593017578125f);
-  float _50 = exp2(log2(abs(cbHDRResolve.vParams.y * mad(0.011362316086888313f, _26, mad(0.9195404052734375f, _25, (_24 * 0.06909728795289993f))))) * 0.1593017578125f);
-  float _51 = exp2(log2(abs(cbHDRResolve.vParams.y * mad(0.8955952525138855f, _26, mad(0.08801330626010895f, _25, (_24 * 0.016391439363360405f))))) * 0.1593017578125f);
+  // The exponent 0.1593017578125 is ST.2084/PQ m1. Keep this pass as a
+  // pure PQ encoder: floor invalid negative values, but do not hard-cap the
+  // top end. Highlight limiting should come from the upstream tonemap shader.
+  float pq_input_r = max(cbHDRResolve.vParams.y * mad(0.04331306740641594f, _26, mad(0.3292830288410187f, _25, (_24 * 0.6274039149284363f))), 0.0f);
+  float pq_input_g = max(cbHDRResolve.vParams.y * mad(0.011362316086888313f, _26, mad(0.9195404052734375f, _25, (_24 * 0.06909728795289993f))), 0.0f);
+  float pq_input_b = max(cbHDRResolve.vParams.y * mad(0.8955952525138855f, _26, mad(0.08801330626010895f, _25, (_24 * 0.016391439363360405f))), 0.0f);
+
+  float _49 = exp2(log2(pq_input_r) * 0.1593017578125f);
+  float _50 = exp2(log2(pq_input_g) * 0.1593017578125f);
+  float _51 = exp2(log2(pq_input_b) * 0.1593017578125f);
 
   // Finish ST.2084/PQ encoding:
   //   ((c1 + c2 * L^m1) / (1 + c3 * L^m1)) ^ m2
